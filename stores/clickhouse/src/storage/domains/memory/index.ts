@@ -133,14 +133,31 @@ export class MemoryStorageClickhouse extends MemoryStorage {
         query_params: { messageIds },
       });
 
-      // Update thread timestamps
+      // Bump thread updatedAt by inserting a new version (ReplacingMergeTree pattern)
       if (threadIds.length > 0) {
-        // Remove 'Z' suffix as ClickHouse DateTime64 expects format without timezone suffix
-        const now = new Date().toISOString().replace('Z', '');
-        await this.client.command({
-          query: `ALTER TABLE ${TABLE_THREADS} UPDATE updatedAt = {now:DateTime64(3)} WHERE id IN {threadIds:Array(String)}`,
-          query_params: { now, threadIds },
-        });
+        const existingThreads = await this.getLatestThreads(threadIds);
+        if (existingThreads.size > 0) {
+          const now = Date.now();
+          await this.client.insert({
+            table: TABLE_THREADS,
+            format: 'JSONEachRow',
+            values: Array.from(existingThreads.values()).map(existingThread => ({
+              id: existingThread.id,
+              resourceId: existingThread.resourceId,
+              title: existingThread.title,
+              metadata: serializeMetadata(existingThread.metadata),
+              createdAt: existingThread.createdAt,
+              updatedAt: new Date(Math.max(now, new Date(existingThread.updatedAt).getTime() + 1))
+                .toISOString()
+                .replace('Z', ''),
+            })),
+            clickhouse_settings: {
+              date_time_input_format: 'best_effort',
+              use_client_time_zone: 1,
+              output_format_json_quote_64bit_integers: 0,
+            },
+          });
+        }
       }
     } catch (error) {
       throw new MastraError(

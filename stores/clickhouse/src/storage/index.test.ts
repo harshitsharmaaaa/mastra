@@ -556,6 +556,135 @@ describe('ClickHouse memory updateMessages', () => {
   });
 });
 
+describe('ClickHouse deleteMessages thread version bump', () => {
+  const domainConfig = {
+    url: TEST_CONFIG.url,
+    username: TEST_CONFIG.username || 'default',
+    password: TEST_CONFIG.password || '',
+  };
+  const memory = new MemoryStorageClickhouse(domainConfig);
+
+  beforeAll(async () => {
+    await memory.init();
+  });
+
+  it('does not use ALTER TABLE mutation when deleting messages', async () => {
+    const threadId = `thread-del-nomutate-${Date.now()}`;
+    const resourceId = 'resource-del-nomutate';
+    const messageId = `msg-del-nomutate-${Date.now()}`;
+
+    await memory.saveThread({
+      thread: { id: threadId, resourceId, title: 'before delete', metadata: {}, createdAt: new Date(), updatedAt: new Date() },
+    });
+    await memory.saveMessages({
+      messages: [
+        {
+          id: messageId,
+          threadId,
+          resourceId,
+          role: 'user',
+          type: 'v2',
+          createdAt: new Date(),
+          content: { format: 2, parts: [{ type: 'text', text: 'hello' }] },
+        },
+      ],
+    });
+
+    const command = vi.spyOn((memory as unknown as { client: ReturnType<typeof createClient> }).client, 'command');
+    try {
+      await memory.deleteMessages([messageId]);
+
+      const mutations = command.mock.calls.filter(([params]) => /ALTER TABLE/i.test(params.query));
+      expect(mutations).toEqual([]);
+    } finally {
+      command.mockRestore();
+      await memory.deleteThread({ threadId });
+    }
+  });
+
+  it('preserves thread fields and bumps updatedAt after deleteMessages', async () => {
+    const threadId = `thread-del-preserve-${Date.now()}`;
+    const resourceId = 'resource-del-preserve';
+    const messageId = `msg-del-preserve-${Date.now()}`;
+
+    const originalUpdatedAt = new Date();
+    await memory.saveThread({
+      thread: {
+        id: threadId,
+        resourceId,
+        title: 'preserved title',
+        metadata: { key: 'value' },
+        createdAt: new Date(),
+        updatedAt: originalUpdatedAt,
+      },
+    });
+    await memory.saveMessages({
+      messages: [
+        {
+          id: messageId,
+          threadId,
+          resourceId,
+          role: 'user',
+          type: 'v2',
+          createdAt: new Date(),
+          content: { format: 2, parts: [{ type: 'text', text: 'hello' }] },
+        },
+      ],
+    });
+
+    await memory.deleteMessages([messageId]);
+
+    const thread = await memory.getThreadById({ threadId });
+    expect(thread).toBeDefined();
+    expect(thread?.title).toBe('preserved title');
+    expect(thread?.metadata).toEqual({ key: 'value' });
+    expect(new Date(thread!.updatedAt).getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+
+    await memory.deleteThread({ threadId });
+  });
+
+  it('handles missing threads gracefully during deleteMessages', async () => {
+    const threadId = `thread-del-missing-${Date.now()}`;
+    const resourceId = 'resource-del-missing';
+    const messageId = `msg-del-missing-${Date.now()}`;
+
+    // Insert an orphan message directly: saveMessages requires the thread to
+    // exist, but deleteMessages must tolerate messages whose thread row is gone.
+    const client = createTestClient();
+    await client.insert({
+      table: 'mastra_messages',
+      values: [
+        {
+          id: messageId,
+          thread_id: threadId,
+          resourceId,
+          role: 'user',
+          type: 'v2',
+          content: JSON.stringify({ format: 2, parts: [{ type: 'text', text: 'hello' }] }),
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      format: 'JSONEachRow',
+      clickhouse_settings: {
+        date_time_input_format: 'best_effort',
+        use_client_time_zone: 1,
+        output_format_json_quote_64bit_integers: 0,
+      },
+    });
+
+    await expect(memory.deleteMessages([messageId])).resolves.toBeUndefined();
+
+    const { messages } = await memory.listMessagesById({ messageIds: [messageId] });
+    expect(messages.length).toBe(0);
+
+    await client.close();
+  });
+
+  it('handles empty messageIds array', async () => {
+    await expect(memory.deleteMessages([])).resolves.toBeUndefined();
+  });
+});
+
 describe('ClickHouse legacy observability listTraces', () => {
   const observability = new ObservabilityStorageClickhouse({
     url: TEST_CONFIG.url,
