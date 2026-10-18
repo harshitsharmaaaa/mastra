@@ -2,7 +2,7 @@ import type { Experimental_EvaluationModelV4 as EvaluationModelV4 } from '@ai-sd
 import { expectTypeOf } from 'vitest';
 import { z } from 'zod/v4';
 
-import { Classifier, type BooleanAnswer, type ChoiceAnswer, type ScoreAnswer } from '../classifier';
+import { Classifier, type BooleanAnswer, type ChoiceAnswer, type RefusalAnswer, type ScoreAnswer } from '../classifier';
 import { createWorkflow } from './create';
 import type { Step } from './step';
 import { createStep } from './workflow';
@@ -18,9 +18,9 @@ const classifier = new Classifier({ id: 'ticket-router', model, questions });
 const step = createStep(classifier);
 type StepOutput<T> = T extends Step<any, any, any, infer OUTPUT, any, any, any> ? OUTPUT : never;
 type Output = StepOutput<typeof step>;
-expectTypeOf<Output['answers']['route']>().toEqualTypeOf<ChoiceAnswer<'billing' | 'support'>>();
-expectTypeOf<Output['answers']['quality']>().toEqualTypeOf<ScoreAnswer>();
-expectTypeOf<Output['answers']['urgent']>().toEqualTypeOf<BooleanAnswer>();
+expectTypeOf<Output['answers']['route']>().toEqualTypeOf<ChoiceAnswer<'billing' | 'support'> | RefusalAnswer>();
+expectTypeOf<Output['answers']['quality']>().toEqualTypeOf<ScoreAnswer | RefusalAnswer>();
+expectTypeOf<Output['answers']['urgent']>().toEqualTypeOf<BooleanAnswer | RefusalAnswer>();
 
 createWorkflow({
   id: 'typed-classifier',
@@ -31,8 +31,8 @@ createWorkflow({
   .branch([
     [
       async ({ inputData }) => {
-        expectTypeOf(inputData.answers.route).toEqualTypeOf<ChoiceAnswer<'billing' | 'support'>>();
-        return inputData.answers.route.choice === 'billing';
+        expectTypeOf(inputData.answers.route).toEqualTypeOf<ChoiceAnswer<'billing' | 'support'> | RefusalAnswer>();
+        return inputData.answers.route.type === 'choice' && inputData.answers.route.choice === 'billing';
       },
       createStep({
         id: 'billing',

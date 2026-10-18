@@ -117,6 +117,24 @@ describe('createClassifierScorer', () => {
     await expect(booleanScorer.run({ output: 'answer' })).resolves.toMatchObject({ score: 0.37 });
   });
 
+  it('fails clearly when the classifier refuses the selected question', async () => {
+    const classifier = createClassifier();
+    vi.spyOn(classifier, 'decide').mockResolvedValue(mockResult({ type: 'refusal' }) as any);
+    const scorer = createClassifierScorer({
+      id: 'refused-score',
+      classifier,
+      question: 'route',
+      scores: { correct: 1, partial: 0.5, incorrect: 0 },
+      state: ({ run }) => run.output,
+    });
+
+    const error = await scorer.run({ output: 'answer' }).catch(error => error);
+    expect(error).toBeInstanceOf(ScorerRunError);
+    expect(error.cause).toMatchObject({
+      message: "Classifier question 'route' was refused by the model.",
+    });
+  });
+
   it('forwards the selected state and classifier options', async () => {
     const classifier = createClassifier();
     const evaluate = vi

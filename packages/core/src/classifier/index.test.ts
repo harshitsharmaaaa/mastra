@@ -171,6 +171,30 @@ describe('Classifier', () => {
       expect(result.response.modelId).toBe('gpt-6-luna');
     });
 
+    it('returns refusal answers without applying the question type validation', async () => {
+      const doDecide = vi.fn<DecisionModelV4['doDecide']>(async () => ({
+        answers: {
+          risk: { type: 'refusal' },
+          safe: { type: 'boolean', probability: 0.1 },
+        } as never,
+        warnings: [],
+      }));
+      const classifier = new Classifier({ id: 'refusal-answer', model: createDecisionModel(doDecide) });
+
+      const result = await classifier.decide({
+        state: 'hello',
+        questions: {
+          risk: { type: 'choice', criteria: { low: 'Low', high: 'High' } },
+          safe: { type: 'boolean', criteria: { true: 'Unsafe', false: 'Safe' } },
+        },
+      });
+
+      expect(result.answers).toEqual({
+        risk: { type: 'refusal' },
+        safe: { type: 'boolean', probability: 0.1 },
+      });
+    });
+
     it('surfaces non-retryable provider errors such as refusals', async () => {
       const refusal = new APICallError({
         message: 'The model refused to answer',

@@ -125,16 +125,22 @@ export type BooleanAnswer = {
   probability: number;
 };
 
-export type ClassifierAnswer<QUESTION extends ClassifierQuestion> = QUESTION extends {
-  type: 'choice';
-  criteria: infer CRITERIA extends Readonly<Record<string, DecisionModelV4Input | null>>;
-}
-  ? ChoiceAnswer<Extract<keyof CRITERIA, string>>
-  : QUESTION extends { type: 'score' }
-    ? ScoreAnswer
-    : QUESTION extends { type: 'boolean' }
-      ? BooleanAnswer
-      : never;
+export type RefusalAnswer = {
+  type: 'refusal';
+};
+
+export type ClassifierAnswer<QUESTION extends ClassifierQuestion> =
+  | RefusalAnswer
+  | (QUESTION extends {
+      type: 'choice';
+      criteria: infer CRITERIA extends Readonly<Record<string, DecisionModelV4Input | null>>;
+    }
+      ? ChoiceAnswer<Extract<keyof CRITERIA, string>>
+      : QUESTION extends { type: 'score' }
+        ? ScoreAnswer
+        : QUESTION extends { type: 'boolean' }
+          ? BooleanAnswer
+          : never);
 
 export type ClassifierAnswers<QUESTIONS extends ClassifierQuestions> = {
   -readonly [KEY in keyof QUESTIONS]: ClassifierAnswer<QUESTIONS[KEY]>;
@@ -532,7 +538,7 @@ function validateProviderEnvelope(result: {
 
 function validateProviderResult(
   questions: ClassifierQuestions,
-  answers: Record<string, DecisionModelV4Answer>,
+  answers: Record<string, DecisionModelV4Answer | RefusalAnswer>,
   rounding?: { probabilityDecimals?: number; scoreDecimals?: number },
 ): asserts answers is ClassifierAnswers<ClassifierQuestions> {
   if (!isPlainObject(answers)) throw new TypeError('The evaluation model returned invalid answers.');
@@ -550,7 +556,11 @@ function validateProviderResult(
   for (const questionId of questionIds) {
     const question = questions[questionId]!;
     const answer = answers[questionId]!;
-    if (!isPlainObject(answer) || answer.type !== question.type) {
+    if (!isPlainObject(answer)) {
+      throw new TypeError(`Answer '${questionId}' does not match its question type.`);
+    }
+    if ((answer as { type?: unknown }).type === 'refusal') continue;
+    if (answer.type !== question.type) {
       throw new TypeError(`Answer '${questionId}' does not match its question type.`);
     }
 

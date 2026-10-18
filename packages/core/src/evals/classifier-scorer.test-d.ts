@@ -40,10 +40,12 @@ declare const choiceRun: ChoiceRun;
 const choiceResult = await choiceScorer.run(choiceRun);
 const choiceEvidence = choiceResult.analyzeStepResult!;
 expectTypeOf(choiceResult.score).toEqualTypeOf<number | undefined>();
-expectTypeOf(choiceEvidence.answer.choice).toEqualTypeOf<'correct' | 'partial' | 'incorrect'>();
-expectTypeOf(choiceEvidence.answer.probabilities).toEqualTypeOf<
-  Record<'correct' | 'partial' | 'incorrect', number> | undefined
->();
+if (choiceEvidence.answer.type === 'choice') {
+  expectTypeOf(choiceEvidence.answer.choice).toEqualTypeOf<'correct' | 'partial' | 'incorrect'>();
+  expectTypeOf(choiceEvidence.answer.probabilities).toEqualTypeOf<
+    Record<'correct' | 'partial' | 'incorrect', number> | undefined
+  >();
+}
 
 createClassifierScorer({
   id: 'quality-score',
@@ -71,7 +73,9 @@ type RegisteredRun = Parameters<typeof registeredScorer.run>[0];
 declare const registeredRun: RegisteredRun;
 const registeredResult = await registeredScorer.run(registeredRun);
 expectTypeOf(registeredResult.analyzeStepResult!.question).toEqualTypeOf<'quality'>();
-expectTypeOf(registeredResult.analyzeStepResult!.answer.score).toEqualTypeOf<number>();
+if (registeredResult.analyzeStepResult!.answer.type === 'score') {
+  expectTypeOf(registeredResult.analyzeStepResult!.answer.score).toEqualTypeOf<number>();
+}
 
 const customScorer = createClassifierScorer({
   id: 'custom-score',

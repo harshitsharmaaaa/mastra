@@ -135,7 +135,11 @@ function projectClassifierScore(
   question: ClassifierQuestions[string],
   answer: ClassifierAnswer<any>,
   scores?: Record<string, number>,
+  questionId?: string,
 ): number {
+  if (answer.type === 'refusal') {
+    throw new TypeError(`Classifier question${questionId ? ` '${questionId}'` : ''} was refused by the model.`);
+  }
   if (answer.type === 'choice') {
     const score = scores?.[answer.choice];
     if (typeof score !== 'number') {
@@ -152,6 +156,9 @@ function projectClassifierScore(
 }
 
 function classifierReason(question: string, answer: ClassifierAnswer<any>, score: number): string {
+  if (answer.type === 'refusal') {
+    return `Classifier question '${question}' was refused by the model.`;
+  }
   if (answer.type === 'choice') {
     return `Classifier question '${question}' selected '${answer.choice}' (score: ${score}).`;
   }
@@ -263,6 +270,7 @@ export function createClassifierScorer(options: any): MastraScorer<any, any, any
         resolveClassifier(mastra).questions[options.question]!,
         results.analyzeStepResult.answer,
         options.scores,
+        options.question,
       ),
     )
     .generateReason(({ results, score }) =>
