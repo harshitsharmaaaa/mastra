@@ -1209,11 +1209,23 @@ export class ReflectorRunner {
     const record = { ...callerRecord };
     const lockKey = this.buffering.getLockKey(record.threadId, record.resourceId);
     const reflectThreshold = getMaxThreshold(this.getEffectiveReflectionTokens(record));
-    const priorExtractedValues = await getThreadExtractedValues(
-      this.storage,
-      this.reflectionConfig.extractors,
-      requestedThreadId ?? record.threadId,
-    );
+    // Prior extractor values are only consumed once a reflection actually starts
+    // (async trigger, background fallback, or the sync path). Most steps stay
+    // below every reflection threshold — defer the thread read so those steps
+    // pay no storage round trip for a value that may never be used.
+    let priorExtractedValues: Record<string, unknown> | undefined;
+    let priorExtractedValuesResolved = false;
+    const loadPriorExtractedValues = async () => {
+      if (!priorExtractedValuesResolved) {
+        priorExtractedValuesResolved = true;
+        priorExtractedValues = await getThreadExtractedValues(
+          this.storage,
+          this.reflectionConfig.extractors,
+          requestedThreadId ?? record.threadId,
+        );
+      }
+      return priorExtractedValues;
+    };
 
     // ════════════════════════════════════════════════════════════════════════
     // ASYNC BUFFERING: Trigger background reflection at bufferActivation ratio
@@ -1242,7 +1254,7 @@ export class ReflectorRunner {
           requestContext,
           observabilityContext,
           reflectionHooks,
-          priorExtractedValues,
+          await loadPriorExtractedValues(),
           mainAgent,
           sendSignal,
           trigger,
@@ -1350,7 +1362,7 @@ export class ReflectorRunner {
           requestContext,
           observabilityContext,
           reflectionHooks,
-          priorExtractedValues,
+          await loadPriorExtractedValues(),
           mainAgent,
           sendSignal,
           trigger,
@@ -1451,7 +1463,7 @@ export class ReflectorRunner {
         undefined,
         compressionStartLevel,
         requestContext,
-        priorExtractedValues,
+        await loadPriorExtractedValues(),
         observabilityContext,
         undefined,
         mainAgent,

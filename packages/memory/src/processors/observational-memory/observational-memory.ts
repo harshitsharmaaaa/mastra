@@ -5,6 +5,7 @@ import type { MastraModelConfig, WidenModelId } from '@mastra/core/llm';
 import { modelSupportsTemperature, resolveModelConfig } from '@mastra/core/llm';
 import type { Mastra } from '@mastra/core/mastra';
 import { getThreadOMMetadata, setThreadOMMetadata } from '@mastra/core/memory';
+import type { StorageThreadType } from '@mastra/core/memory';
 import type { ObservabilityContext } from '@mastra/core/observability';
 import type { ProcessorContext, ProcessorStreamWriter } from '@mastra/core/processors';
 import { MessageHistory } from '@mastra/core/processors';
@@ -2165,11 +2166,15 @@ export class ObservationalMemory {
    *
    * Messages with observation markers are always saved (upserted) even if sealed,
    * because the markers need to be persisted to storage.
+   *
+   * `opts.thread` is an optional caller vouch for the thread row (see
+   * `MessageHistory.persistMessages`); it skips one thread existence read per save.
    */
   async persistMessages(
     messagesToSave: MastraDBMessage[],
     threadId: string,
     resourceId: string | undefined,
+    opts?: { thread?: Partial<StorageThreadType> & { id: string } },
   ): Promise<void> {
     const filteredMessages: MastraDBMessage[] = [];
     for (const msg of messagesToSave) {
@@ -2190,6 +2195,7 @@ export class ObservationalMemory {
         messages: filteredMessages,
         threadId,
         resourceId,
+        thread: opts?.thread,
       });
     }
   }

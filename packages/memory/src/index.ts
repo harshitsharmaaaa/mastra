@@ -78,6 +78,7 @@ import { WorkingMemoryExtractor } from './processors/observational-memory/workin
 import { isSystemReminderMessage } from './system-reminders';
 import { recallTool } from './tools/om-tools';
 import { createWorkingMemoryTool, deepMergeWorkingMemory, parseWorkingMemoryJson } from './tools/working-memory';
+import { workingMemoryResourceCacheKey } from './working-memory-cache';
 
 export {
   ModelByInputTokens,
@@ -1959,7 +1960,7 @@ ${workingMemory}`;
         return resource?.workingMemory || null;
       };
       workingMemoryData = runState
-        ? await runState.load(`working-memory:resource:${resourceId}`, loadWorkingMemory)
+        ? await runState.load(workingMemoryResourceCacheKey(resourceId), loadWorkingMemory)
         : await loadWorkingMemory();
     } else {
       const thread = runState?.threadLoaded ? runState.thread : await this.getThreadById({ threadId });

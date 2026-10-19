@@ -6,6 +6,8 @@ import { createTool } from '@mastra/core/tools';
 import { standardSchemaToJSONSchema } from '@mastra/schema-compat/schema';
 import type { JSONSchema7 } from 'json-schema';
 
+import { refreshWorkingMemoryCache } from '../working-memory-cache';
+
 // Keep these in sync with @mastra/core/memory. @mastra/memory supports older
 // peer-compatible @mastra/core versions that may not export the newer names.
 const UPDATE_WORKING_MEMORY_TOOL_NAME = 'updateWorkingMemory';
@@ -295,6 +297,7 @@ export const updateWorkingMemoryTool = (memoryConfig?: MemoryConfigInternal) => 
             workingMemory: newData,
             memoryConfig,
           });
+          refreshWorkingMemoryCache({ requestContext: context?.requestContext, memory, threadId, resourceId });
           return { success: true };
         }
 
@@ -349,6 +352,10 @@ export const updateWorkingMemoryTool = (memoryConfig?: MemoryConfigInternal) => 
         workingMemory,
         memoryConfig,
       });
+
+      // Working memory changed: drop the run-scoped cache so a later read in this
+      // run (e.g. the working-memory state signal) sees the new value.
+      refreshWorkingMemoryCache({ requestContext: context?.requestContext, memory, threadId, resourceId });
 
       return { success: true };
     },
@@ -456,6 +463,10 @@ export const __experimental_updateWorkingMemoryToolVNext = (config: MemoryConfig
         searchString: workingMemoryInput.searchString,
         memoryConfig: config,
       });
+
+      // Working memory changed: drop the run-scoped cache so a later read in this
+      // run (e.g. the working-memory state signal) sees the new value.
+      refreshWorkingMemoryCache({ requestContext: context?.requestContext, memory, threadId, resourceId });
 
       if (result) {
         return result;

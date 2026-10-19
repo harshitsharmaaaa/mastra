@@ -67,6 +67,16 @@ export class MemoryRunState {
     return promise;
   }
 
+  /**
+   * Drop a cached value so the next `load` for that key reads from storage again.
+   *
+   * Callers that write the underlying row mid-run (working memory updates, for
+   * example) use this to keep a run-scoped cache from serving stale data.
+   */
+  refresh(key: string): void {
+    this.#cache.delete(key);
+  }
+
   set<T>(key: string, value: T): void {
     this.#cache.set(key, { promise: Promise.resolve(value) });
   }

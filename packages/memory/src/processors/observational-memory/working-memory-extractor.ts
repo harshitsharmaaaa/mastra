@@ -5,6 +5,7 @@ import { standardSchemaToJSONSchema } from '@mastra/schema-compat/schema';
 import { z } from 'zod';
 
 import { stripNullsFromOptional } from '../../tools/working-memory';
+import { refreshWorkingMemoryCache } from '../../working-memory-cache';
 import { Extractor } from './extractor';
 import type { ExtractorRuntimeContext } from './extractor';
 
@@ -130,6 +131,15 @@ export class WorkingMemoryExtractor extends Extractor<string | Record<string, un
           resourceId,
           workingMemory,
           memoryConfig,
+        });
+
+        // Working memory changed: drop the run-scoped cache so a later read in
+        // this run (e.g. the working-memory state signal) sees the new value.
+        refreshWorkingMemoryCache({
+          requestContext,
+          memory: memory!,
+          threadId,
+          resourceId,
         });
 
         return document as Record<string, unknown> | string;

@@ -4,6 +4,7 @@ import { filterMessagesForPersistence } from '../../agent/filter-messages-for-pe
 import { noteThreadMessagesSaved } from '../../agent/thread-saves';
 import { loadMessageHistory, parseMemoryRequestContext } from '../../memory';
 import { getMemoryTokenBoundary, isAfterMemoryTokenBoundary } from '../../memory/message-history-config';
+import type { StorageThreadType } from '../../memory/types';
 import { SpanType } from '../../observability';
 import type { ObservabilityContext, MemoryOperationAttributes } from '../../observability';
 import { MASTRA_CONTINUATION_TOOL_CALL_IDS_KEY } from '../../request-context';
@@ -332,7 +333,12 @@ export class MessageHistory implements Processor {
     span?.update({ attributes: { messageCount: messagesToSave.length } });
 
     try {
-      await this.persistMessages({ messages: messagesToSave, threadId, resourceId });
+      // Vouch the run-captured thread row when it matches the save's thread:
+      // the run path (prepare-memory-step / legacy prepare) guarantees the row
+      // exists — re-verifying here costs one storage round trip per turn.
+      const vouchedThread =
+        memoryContext?.thread && memoryContext.thread.id === threadId ? memoryContext.thread : undefined;
+      await this.persistMessages({ messages: messagesToSave, threadId, resourceId, thread: vouchedThread });
       // add extra 1ms latency to make sure the next generate has not the same input
       await new Promise(resolve => setTimeout(resolve, 10));
 
@@ -349,9 +355,20 @@ export class MessageHistory implements Processor {
    *
    * This method can be called externally by other processors (e.g., ObservationalMemory)
    * that need to save messages incrementally.
+   *
+   * `args.thread` is a vouch: when the caller holds a thread row it already knows
+   * exists in this storage (e.g. the run's thread captured at run start), pass it
+   * through and the existence check/auto-create — one storage round trip per save —
+   * is skipped. The row's contents are not re-read or written here; staleness of
+   * metadata on the vouched object is irrelevant for message persistence.
    */
-  async persistMessages(args: { messages: MastraDBMessage[]; threadId: string; resourceId?: string }): Promise<void> {
-    const { messages, threadId, resourceId } = args;
+  async persistMessages(args: {
+    messages: MastraDBMessage[];
+    threadId: string;
+    resourceId?: string;
+    thread?: Partial<StorageThreadType> & { id: string };
+  }): Promise<void> {
+    const { messages, threadId, resourceId, thread: vouchedThread } = args;
 
     if (messages.length === 0) {
       return;
@@ -368,19 +385,22 @@ export class MessageHistory implements Processor {
     // Ensure thread exists (create if needed) before saving messages.
     // Nothing to write when it already exists: re-writing the row we just read
     // would clobber a title generated concurrently with this save.
-    const thread = await this.storage.getThreadById({ threadId });
-    if (!thread) {
-      // Auto-create thread if it doesn't exist
-      await this.storage.saveThread({
-        thread: {
-          id: threadId,
-          resourceId: resourceId || threadId,
-          title: '',
-          metadata: {},
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
-      });
+    // A caller-vouched thread skips both the read and the auto-create.
+    if (!vouchedThread) {
+      const thread = await this.storage.getThreadById({ threadId });
+      if (!thread) {
+        // Auto-create thread if it doesn't exist
+        await this.storage.saveThread({
+          thread: {
+            id: threadId,
+            resourceId: resourceId || threadId,
+            title: '',
+            metadata: {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+      }
     }
 
     // Persist messages after thread is guaranteed to exist

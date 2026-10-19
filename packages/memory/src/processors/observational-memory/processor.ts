@@ -387,13 +387,21 @@ export class ObservationalMemoryProcessor implements Processor<'observational-me
         // ── Token persistence (processor-specific) ──────────
         // prepare() already counted the current unobserved window and resource context.
         const finalTotalPending = ctx.status.pendingTokens;
-        try {
-          await runOMCommit(this.engine.buffering.getLockKey(threadId, resourceId), () =>
-            this.engine.getStorage().setPendingMessageTokens(turnRecord.id, finalTotalPending),
+        const previousPendingTokens = turnRecord.pendingMessageTokens;
+        this.turn.patchRecord({ pendingMessageTokens: finalTotalPending });
+        // Skip the write when nothing changed since the last persist; idle steps
+        // (no new content) would otherwise re-write the same value every step.
+        if (finalTotalPending !== previousPendingTokens) {
+          // The pending-token column is an optimization aid for activation,
+          // never a correctness input (activation prefers the live count) —
+          // enqueue it as background work so model calls are never gated on it.
+          void this.engine.trackBackgroundWork(
+            runOMCommit(this.engine.buffering.getLockKey(threadId, resourceId), () =>
+              this.engine.getStorage().setPendingMessageTokens(turnRecord.id, finalTotalPending),
+            ).catch(() => {
+              // Token persistence is intentionally non-fatal for streaming UX.
+            }),
           );
-          this.turn.patchRecord({ pendingMessageTokens: finalTotalPending });
-        } catch {
-          // Token persistence is intentionally non-fatal for streaming UX.
         }
 
         // ── Repro capture (processor-specific) ──────────────
@@ -471,7 +479,9 @@ export class ObservationalMemoryProcessor implements Processor<'observational-me
           const newInput = persistenceMessageList.get.input.db();
           const messagesToSave = [...newInput, ...newOutput];
           if (messagesToSave.length > 0 && context.threadId) {
-            await this.engine.persistMessages(messagesToSave, context.threadId, context.resourceId);
+            await this.engine.persistMessages(messagesToSave, context.threadId, context.resourceId, {
+              thread: memoryContext?.thread?.id === context.threadId ? memoryContext.thread : undefined,
+            });
           }
         }
 

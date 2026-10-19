@@ -32,7 +32,8 @@
 
 import { createHash } from 'node:crypto';
 
-import type { MastraMemory, MemoryConfigInternal, WorkingMemoryTemplate } from '@mastra/core/memory';
+import type { MemoryConfigInternal, MemoryRunState, WorkingMemoryTemplate } from '@mastra/core/memory';
+import { getMemoryRunState } from '@mastra/core/memory';
 import type {
   ComputeStateSignalArgs,
   ComputeStateSignalResult,
@@ -40,6 +41,22 @@ import type {
   ProcessorActiveStateSignal,
 } from '@mastra/core/processors';
 import { structuredPatch } from 'diff';
+
+/**
+ * The memory surface this processor needs. `getWorkingMemory` accepts the
+ * run-scoped state so resource working memory can be read once per run
+ * instead of once per step.
+ */
+type WorkingMemoryReader = {
+  getWorkingMemoryTemplate(args: { memoryConfig?: MemoryConfigInternal }): Promise<WorkingMemoryTemplate | null>;
+  getWorkingMemory(args: {
+    threadId: string;
+    resourceId?: string;
+    memoryConfig?: MemoryConfigInternal;
+    runState?: MemoryRunState;
+  }): Promise<string | null>;
+  getMergedThreadConfig(memoryConfig?: MemoryConfigInternal): MemoryConfigInternal;
+};
 
 export const WORKING_MEMORY_STATE_ID = 'working-memory';
 export const WORKING_MEMORY_STATE_PROCESSOR_ID = 'working-memory-state';
@@ -49,7 +66,7 @@ export class WorkingMemoryStateProcessor implements Processor<typeof WORKING_MEM
   readonly stateId = WORKING_MEMORY_STATE_ID;
 
   constructor(
-    private readonly memory: MastraMemory,
+    private readonly memory: WorkingMemoryReader,
     private readonly memoryConfig?: MemoryConfigInternal,
   ) {}
 
@@ -57,10 +74,24 @@ export class WorkingMemoryStateProcessor implements Processor<typeof WORKING_MEM
     const template = await this.memory.getWorkingMemoryTemplate({ memoryConfig: this.memoryConfig });
     if (!template) return;
 
+    const mergedConfig = this.memory.getMergedThreadConfig(this.memoryConfig);
+    const scope = mergedConfig.workingMemory?.scope ?? 'resource';
+
+    // Resource-scoped working memory lives on the resource row and only changes
+    // when a writer updates it, so it can be read once per run and invalidated on
+    // write (see refreshWorkingMemoryCache). Thread-scoped working memory lives
+    // on the thread row, which other processors mutate mid-run — keep reading it
+    // fresh so the signal never lags behind those writes.
+    const runState =
+      scope === 'resource'
+        ? getMemoryRunState(args.requestContext, this.memory, args.threadId, args.resourceId)
+        : undefined;
+
     const data = await this.memory.getWorkingMemory({
       threadId: args.threadId,
       resourceId: args.resourceId,
       memoryConfig: this.memoryConfig,
+      runState,
     });
 
     // Nothing stored yet — no state to broadcast. The setWorkingMemory tool
@@ -71,9 +102,6 @@ export class WorkingMemoryStateProcessor implements Processor<typeof WORKING_MEM
     const cacheKey = stableWorkingMemoryCacheKey({ format: template.format, data: contents });
     const shouldMakeSnapshot = !args.contextWindow.hasSnapshot;
     if (args.tracking?.currentCacheKey === cacheKey && !shouldMakeSnapshot) return;
-
-    const mergedConfig = this.memory.getMergedThreadConfig(this.memoryConfig);
-    const scope = mergedConfig.workingMemory?.scope ?? 'resource';
 
     const deltaCandidate =
       template.format === 'markdown' && !shouldMakeSnapshot

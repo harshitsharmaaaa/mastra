@@ -1,5 +1,6 @@
-import type { MessageList } from '@mastra/core/agent';
-import type { MemoryRunState } from '@mastra/core/memory';
+import type { MastraDBMessage, MessageList } from '@mastra/core/agent';
+import { parseMemoryRequestContext } from '@mastra/core/memory';
+import type { MemoryRunState, StorageThreadType } from '@mastra/core/memory';
 import type { ObservabilityContext } from '@mastra/core/observability';
 import type { ProcessorContext, ProcessorStreamWriter } from '@mastra/core/processors';
 import type { RequestContext } from '@mastra/core/request-context';
@@ -45,6 +46,8 @@ export class ObservationTurn {
   private _currentStep?: ObservationStep;
   private _started = false;
   private _ended = false;
+  private _thread?: StorageThreadType | null;
+  private _threadResolved = false;
 
   /** Generation count at turn start — used to detect if reflection happened during the turn. */
   private _generationCountAtStart = -1;
@@ -223,7 +226,7 @@ export class ObservationTurn {
     const unsavedOutput = messageList.get.response.db();
     const unsavedMessages = [...unsavedInput, ...unsavedOutput];
     if (unsavedMessages.length > 0) {
-      await this.om.persistMessages(unsavedMessages, this.threadId, this.resourceId);
+      await this.persistMessages(unsavedMessages, this.threadId);
     }
 
     // When the agent goes idle, start buffering any unobserved messages in the background.
@@ -267,10 +270,55 @@ export class ObservationTurn {
 
   /**
    * Refresh the cached record from storage. Called internally after mutations.
+   *
+   * Observation cycles patch OM metadata onto the thread row (observation cursor,
+   * lastObservedAt), so any thread-row cache held by the turn is invalidated here
+   * — readers that ran straight off storage keep seeing freshly patched rows.
    * @internal
    */
   async refreshRecord(): Promise<void> {
     this.setRecord(await this.om.getOrCreateRecord(this.threadId, this.resourceId));
+    this._threadResolved = false;
+    this._thread = undefined;
+  }
+
+  /**
+   * The storage thread row for this turn, read from storage at most once per
+   * turn (refreshRecord() resets the cache so post-observation cycles only see
+   * patched rows). Turns pay one thread read instead of one per step for work
+   * like the observed-message cursor fallback.
+   */
+  async getThread(): Promise<StorageThreadType | undefined> {
+    if (!this._threadResolved) {
+      this._thread = await this.om.getStorage().getThreadById({ threadId: this.threadId });
+      this._threadResolved = true;
+    }
+    return this._thread ?? undefined;
+  }
+
+  /**
+   * The run-scoped thread row from the agent run, when it matches `threadId`.
+   * Run preparation (prepare-memory-step / legacy prepare) guarantees this row
+   * exists in storage and is persisted up front; message persistence that takes
+   * it as a vouch can skip its own existence read per save.
+   */
+  getVouchedThread(threadId: string): (Partial<StorageThreadType> & { id: string }) | undefined {
+    if (!this.requestContext) return undefined;
+    const memoryContext = parseMemoryRequestContext(this.requestContext);
+    return memoryContext?.thread && memoryContext.thread.id === threadId ? memoryContext.thread : undefined;
+  }
+
+  /**
+   * Persist messages for this turn, vouching the run's thread row when the
+   * request context carries one so persistence skips its thread existence read.
+   */
+  async persistMessages(messages: MastraDBMessage[], threadId: string = this.threadId): Promise<void> {
+    const vouchedThread = this.getVouchedThread(threadId);
+    if (vouchedThread) {
+      await this.om.persistMessages(messages, threadId, this.resourceId, { thread: vouchedThread });
+      return;
+    }
+    await this.om.persistMessages(messages, threadId, this.resourceId);
   }
 
   /**
